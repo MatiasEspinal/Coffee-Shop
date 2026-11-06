@@ -1,25 +1,35 @@
-import java.util.ArrayDeque;
-import java.util.HashSet;
-import java.util.HashMap;
-import java.util.Map;
-import java.util.Queue;
-import java.util.Set;
-import java.util.List;
-import java.util.ArrayList;
-import java.util.Scanner;
 import java.text.Normalizer;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.NoSuchElementException;
+import java.util.Objects;
+import java.util.Queue;
+import java.util.Scanner;
+import java.util.Set;
 
+/** Pedido inmutable de un cliente. */
 class Pedido {
-    private String nombreCliente;
-    private List<String> productos;
-    private String detalle;
-    private String mesero;
+    private final String nombreCliente;
+    private final List<String> productos;
+    private final String detalle;
+    private final String mesero;
 
     public Pedido(String nombreCliente, List<String> productos, String detalle, String mesero) {
+        if (nombreCliente == null || nombreCliente.isBlank()) {
+            throw new IllegalArgumentException("El nombre del cliente es obligatorio.");
+        }
+        if (productos == null || productos.isEmpty()) {
+            throw new IllegalArgumentException("El pedido debe tener al menos un producto.");
+        }
         this.nombreCliente = nombreCliente;
-        this.productos = productos;
-        this.detalle = detalle;
-        this.mesero = mesero;
+        this.productos = List.copyOf(productos); // copia defensiva e inmodificable
+        this.detalle = Objects.requireNonNull(detalle, "El destino es obligatorio.");
+        this.mesero = Objects.requireNonNull(mesero, "El mesero es obligatorio.");
     }
 
     @Override
@@ -35,32 +45,46 @@ class Pedido {
     }
 }
 
-public class CoffeeShop {
-    
-    // TDA: Cola -> Implementación: ArrayDeque O(1)
-    private Queue<Pedido> pedidos;
+public final class CoffeeShop {
 
-    // TDA: Conjunto -> Implementación: HashSet O(1)
-    private Set<String> menuProductosValidador; 
-    private List<String> menuProductosDisplay;   
-    
-    private Map<String, String> formatoProductos;
+    private static final String CANCELAR = "0";
 
-    // TDA: Mapa -> Implementación: HashMap O(1)
-    private Map<Integer, String> empleados;
+    /**
+     * Requisito 1. TDA: Cola (FIFO). Implementación JCF: ArrayDeque.
+     * offer() inserta al final en O(1) amortizado; poll() extrae del frente en O(1).
+     * Se descarta ArrayList porque remove(0) desplaza todos los elementos: O(n).
+     */
+    private final Queue<Pedido> pedidos = new ArrayDeque<>();
+
+    /**
+     * Requisito 2. TDA: Conjunto. Implementación JCF: HashSet.
+     * Garantiza unicidad (add() devuelve false ante duplicados) y contains() es O(1)
+     * en promedio. No se usa TreeSet porque el menú no necesita orden (O(log n)).
+     * Contiene solo los nombres normalizados de los productos: un elemento por producto.
+     */
+    private final Set<String> menuProductos = new HashSet<>();
+
+    /** Índice auxiliar (no es el menú): código normalizado ("p1") -> nombre normalizado ("latte"). */
+    private final Map<String, String> codigoANombre = new HashMap<>();
+
+    /** Solo presentación: nombre normalizado -> "P1 (Latte)", en orden de inserción. */
+    private final Map<String, String> etiquetas = new LinkedHashMap<>();
+
+    /**
+     * Requisito 3. TDA: Mapa (clave -> valor). Implementación JCF: HashMap.
+     * get(id) es O(1) en promedio. No se usa TreeMap porque no se requiere orden de IDs (O(log n)).
+     */
+    private final Map<Integer, String> empleados = new HashMap<>();
 
     public CoffeeShop() {
-        this.pedidos = new ArrayDeque<>();
-        this.menuProductosValidador = new HashSet<>();
-        this.menuProductosDisplay = new ArrayList<>();
-        this.formatoProductos = new HashMap<>();
-        this.empleados = new HashMap<>();
         cargarDatosIniciales();
     }
 
-    private String normalizarTexto(String texto) {
+    // ===================== Lógica del negocio (sin consola) =====================
+
+    private static String normalizarTexto(String texto) {
         String limpio = Normalizer.normalize(texto, Normalizer.Form.NFD);
-        limpio = limpio.replaceAll("[\\p{InCombiningDiacriticalMarks}]", "");
+        limpio = limpio.replaceAll("\\p{InCombiningDiacriticalMarks}", "");
         return limpio.toLowerCase().trim();
     }
 
@@ -71,25 +95,107 @@ public class CoffeeShop {
         agregarProductoAMenu("P4", "Cafe");
         agregarProductoAMenu("P5", "Granizado de Cafe");
 
-        empleados.put(101, "Nicole Valentina Quevedo Franco");
-        empleados.put(102, "Matias Espinal Jaramillo");
-        empleados.put(103, "Cristian Camilo Londoño Vargas");
-        empleados.put(104, "Santiago Zapata Zuleta");
+        agregarEmpleado(101, "Nicole Valentina Quevedo Franco");
+        agregarEmpleado(102, "Matias Espinal Jaramillo");
+        agregarEmpleado(103, "Cristian Camilo Londoño Vargas");
+        agregarEmpleado(104, "Santiago Zapata Zuleta");
     }
 
-    private void agregarProductoAMenu(String codigo, String producto) {
-        String display = codigo + " - " + producto;
-        menuProductosDisplay.add(display);
-        
-        String codLimpio = codigo.toLowerCase();
-        String prodLimpio = normalizarTexto(producto);
+    /** Agrega un producto al menú. Lanza IllegalArgumentException si es nulo, vacío o repetido. */
+    public void agregarProductoAMenu(String codigo, String producto) {
+        if (codigo == null || codigo.isBlank() || producto == null || producto.isBlank()) {
+            throw new IllegalArgumentException("Codigo y nombre del producto son obligatorios.");
+        }
+        String codLimpio = normalizarTexto(codigo);
+        String nombreLimpio = normalizarTexto(producto);
 
-        menuProductosValidador.add(codLimpio); 
-        menuProductosValidador.add(prodLimpio);
+        if (codigoANombre.containsKey(codLimpio) || !menuProductos.add(nombreLimpio)) {
+            throw new IllegalArgumentException("Producto o codigo duplicado: " + codigo + " / " + producto);
+        }
+        codigoANombre.put(codLimpio, nombreLimpio);
+        etiquetas.put(nombreLimpio, codigo + " (" + producto + ")");
+    }
 
-        String formatoBonito = codigo + " (" + producto + ")";
-        formatoProductos.put(codLimpio, formatoBonito);
-        formatoProductos.put(prodLimpio, formatoBonito);
+    /**
+     * Busca un producto por código o nombre en O(1) promedio.
+     * @return la etiqueta del producto, p. ej. "P1 (Latte)"
+     * @throws NoSuchElementException si no existe en el menú
+     */
+    public String buscarProducto(String entrada) {
+        String clave = normalizarTexto(Objects.requireNonNull(entrada));
+        String nombre = codigoANombre.getOrDefault(clave, clave);
+        if (!menuProductos.contains(nombre)) {
+            throw new NoSuchElementException("El producto '" + entrada + "' no existe en el menu.");
+        }
+        return etiquetas.get(nombre);
+    }
+
+    private void validarIdNuevo(int id) {
+        if (id <= 0) {
+            throw new IllegalArgumentException("El ID debe ser un entero positivo.");
+        }
+        if (empleados.containsKey(id)) {
+            throw new IllegalArgumentException("El ID " + id + " ya existe.");
+        }
+    }
+
+    /** Registra un empleado. IDs positivos (el 0 está reservado para cancelar). */
+    public void agregarEmpleado(int id, String nombre) {
+        validarIdNuevo(id);
+        if (nombre == null || nombre.isBlank()) {
+            throw new IllegalArgumentException("El nombre del empleado no puede estar vacio.");
+        }
+        if (empleados.putIfAbsent(id, nombre.trim()) != null) {
+            throw new IllegalArgumentException("El ID " + id + " ya existe.");
+        }
+    }
+
+    /**
+     * Búsqueda instantánea del nombre por ID: una sola llamada a get(), O(1) promedio.
+     * @throws NoSuchElementException si el ID no existe
+     */
+    public String buscarNombreEmpleado(int id) {
+        String nombre = empleados.get(id);
+        if (nombre == null) {
+            throw new NoSuchElementException("No existe un empleado con ID " + id + ".");
+        }
+        return nombre;
+    }
+
+    /** Retira un empleado. @throws NoSuchElementException si el ID no existe */
+    public String retirarEmpleado(int id) {
+        String nombre = empleados.remove(id);
+        if (nombre == null) {
+            throw new NoSuchElementException("No existe un empleado con ID " + id + ".");
+        }
+        return nombre;
+    }
+
+    /** Encola un pedido al final: O(1) amortizado. */
+    public void registrarPedido(Pedido pedido) {
+        pedidos.offer(Objects.requireNonNull(pedido, "No se puede registrar un pedido nulo."));
+    }
+
+    /** Extrae el pedido más antiguo: O(1). Devuelve null si la cola está vacía. */
+    public Pedido atenderSiguiente() {
+        return pedidos.poll();
+    }
+
+    // ===================== Interfaz de consola =====================
+
+    private static boolean esCancelacion(String entrada) {
+        if (CANCELAR.equals(entrada)) {
+            System.out.println("Operacion cancelada. Volviendo al menu...");
+            return true;
+        }
+        return false;
+    }
+
+    private void mostrarEmpleados(String titulo) {
+        System.out.println("\n--- " + titulo + " ---");
+        for (Map.Entry<Integer, String> emp : empleados.entrySet()) {
+            System.out.println("ID: " + emp.getKey() + " -> " + emp.getValue());
+        }
     }
 
     public void iniciarSistema() {
@@ -98,28 +204,31 @@ public class CoffeeShop {
 
         System.out.println("=== BIENVENIDO AL SISTEMA DE COFFEE SHOP ===");
 
-        while (ejecutando) {
-            System.out.println("\n[Monitor] Pedidos en cola de preparacion: " + pedidos.size());
-            System.out.println("1. Registrar nuevo pedido del cliente");
-            System.out.println("2. Preparar (Atender) siguiente pedido");
-            System.out.println("3. Ver lista de pedidos en espera");
-            System.out.println("4. Gestionar personal (Agregar/Quitar meseros)");
-            System.out.println("5. Salir del sistema");
-            System.out.print("Seleccione una opcion: ");
+        try {
+            while (ejecutando) {
+                System.out.println("\n[Monitor] Pedidos en cola de preparacion: " + pedidos.size());
+                System.out.println("1. Registrar nuevo pedido del cliente");
+                System.out.println("2. Preparar (Atender) siguiente pedido");
+                System.out.println("3. Ver lista de pedidos en espera");
+                System.out.println("4. Gestionar personal (Agregar/Quitar meseros)");
+                System.out.println("5. Salir del sistema");
+                System.out.print("Seleccione una opcion: ");
 
-            String inputOpcion = scanner.nextLine().trim();
-
-            switch (inputOpcion) {
-                case "1": registrarPedidoInteractivo(scanner); break;
-                case "2": atenderSiguientePedido(); break;
-                case "3": verPedidosPendientes(); break;
-                case "4": gestionarMeseros(scanner); break;
-                case "5":
-                    System.out.println("Cerrando sistema... Buen turno!");
-                    ejecutando = false;
-                    break;
-                default: System.out.println("Error: Opcion no valida.");
+                switch (scanner.nextLine().trim()) {
+                    case "1": registrarPedidoInteractivo(scanner); break;
+                    case "2": atenderSiguientePedido(); break;
+                    case "3": verPedidosPendientes(); break;
+                    case "4": gestionarMeseros(scanner); break;
+                    case "5":
+                        System.out.println("Cerrando sistema... Buen turno!");
+                        ejecutando = false;
+                        break;
+                    default: System.out.println("Error: Opcion no valida.");
+                }
             }
+        } catch (NoSuchElementException e) {
+            // nextLine() sin más entrada (Ctrl+D / Ctrl+Z o fin de archivo)
+            System.out.println("\nEntrada finalizada. Cerrando sistema...");
         }
         scanner.close();
     }
@@ -130,108 +239,62 @@ public class CoffeeShop {
         System.out.println("2 - Despedir (Quitar) mesero");
         System.out.println("3 - Volver al menu principal");
         System.out.print("-> ");
-        
+
         String opcion = scanner.nextLine().trim();
-        
-        if (opcion.equals("3")) {
-            System.out.println("Volviendo al menu principal...");
-            return;
-        }
 
-        if (opcion.equals("1")) {
-            System.out.println("\nIngrese el ID numerico del nuevo mesero:");
-            System.out.print("-> ");
-            String inputId = scanner.nextLine().trim();
-
-            try {
-                int nuevoId = Integer.parseInt(inputId);
-                if (empleados.containsKey(nuevoId)) {
-                    System.out.println("Error: El ID " + nuevoId + " ya existe.");
-                } else {
-                    System.out.print("Ingrese el nombre completo del mesero: ");
-                    String nuevoNombre = scanner.nextLine().trim();
-                    if (!nuevoNombre.isEmpty()) {
-                        empleados.put(nuevoId, nuevoNombre);
-                        System.out.println("[EXITO] Mesero agregado.");
-                    }
-                }
-            } catch (NumberFormatException e) {
-                System.out.println("Error: El ID debe ser numerico.");
+        try {
+            if (opcion.equals("1")) {
+                System.out.print("\nIngrese el ID numerico (positivo) del nuevo mesero: ");
+                int nuevoId = Integer.parseInt(scanner.nextLine().trim());
+                validarIdNuevo(nuevoId); // falla antes de pedir el nombre
+                System.out.print("Ingrese el nombre completo del mesero: ");
+                agregarEmpleado(nuevoId, scanner.nextLine());
+                System.out.println("[EXITO] Mesero agregado.");
+            } else if (opcion.equals("2")) {
+                mostrarEmpleados("NOMINA ACTUAL");
+                System.out.print("\nIngrese el ID del mesero a retirar: ");
+                int idEliminar = Integer.parseInt(scanner.nextLine().trim());
+                System.out.println("[EXITO] Mesero retirado: " + retirarEmpleado(idEliminar));
+            } else if (opcion.equals("3")) {
+                System.out.println("Volviendo al menu principal...");
+            } else {
+                System.out.println("Error: Opcion no valida.");
             }
-            
-        } else if (opcion.equals("2")) {
-            System.out.println("\n--- NOMINA ACTUAL ---");
-            for (Map.Entry<Integer, String> emp : empleados.entrySet()) {
-                System.out.println("ID: " + emp.getKey() + " -> " + emp.getValue());
-            }
-            System.out.println("\nIngrese el ID del mesero a retirar:");
-            System.out.print("-> ");
-            String inputId = scanner.nextLine().trim();
-
-            try {
-                int idEliminar = Integer.parseInt(inputId);
-                if (empleados.containsKey(idEliminar)) {
-                    String nombreDespedido = empleados.remove(idEliminar);
-                    System.out.println("[EXITO] Mesero retirado: " + nombreDespedido);
-                } else {
-                    System.out.println("Error: ID no encontrado.");
-                }
-            } catch (NumberFormatException e) {
-                System.out.println("Error: ID invalido.");
-            }
+        } catch (NumberFormatException e) {
+            System.out.println("Error: El ID debe ser numerico.");
+        } catch (IllegalArgumentException | NoSuchElementException e) {
+            System.out.println("Error: " + e.getMessage());
         }
     }
 
     private void registrarPedidoInteractivo(Scanner scanner) {
-        System.out.println("\n--- MESEROS DISPONIBLES ---");
-        for (Map.Entry<Integer, String> empleado : empleados.entrySet()) {
-            System.out.println("ID: " + empleado.getKey() + " -> " + empleado.getValue());
-        }
-        
         if (empleados.isEmpty()) {
             System.out.println("Error: No hay meseros. Vaya a Gestionar Personal.");
             return;
         }
+        mostrarEmpleados("MESEROS DISPONIBLES");
 
-        int idEmpleado = -1;
-        String nombreEmpleado = "";
-        
+        String nombreEmpleado;
         while (true) {
-            System.out.print("\nIngrese su ID de empleado: ");
+            System.out.print("\nIngrese su ID de empleado (0 = cancelar): ");
             String input = scanner.nextLine().trim();
-            
-            // Función oculta de cancelar
-            if (input.equals("0")) {
-                System.out.println("Operacion cancelada. Volviendo al menu...");
-                return; 
-            }
-            
+            if (esCancelacion(input)) return;
             try {
-                idEmpleado = Integer.parseInt(input);
-                if (empleados.containsKey(idEmpleado)) {
-                    nombreEmpleado = empleados.get(idEmpleado);
-                    break; 
-                } else {
-                    System.out.println("Error: ID no encontrado.");
-                }
+                nombreEmpleado = buscarNombreEmpleado(Integer.parseInt(input));
+                break;
             } catch (NumberFormatException e) {
                 System.out.println("Error: El ID debe ser un numero.");
+            } catch (NoSuchElementException e) {
+                System.out.println("Error: " + e.getMessage());
             }
         }
 
-        String nombreCliente = "";
+        String nombreCliente;
         while (true) {
             System.out.println("\n--- DATOS DEL CLIENTE ---");
-            System.out.println("Ingrese el nombre del cliente:");
-            System.out.print("-> ");
+            System.out.print("Ingrese el nombre del cliente (0 = cancelar): ");
             nombreCliente = scanner.nextLine().trim();
-            
-            // Función oculta de cancelar
-            if (nombreCliente.equals("0")) {
-                System.out.println("Operacion cancelada. Volviendo al menu...");
-                return; 
-            }
-            
+            if (esCancelacion(nombreCliente)) return;
             if (!nombreCliente.isEmpty()) break;
             System.out.println("Error: El nombre no puede estar vacio.");
         }
@@ -241,90 +304,53 @@ public class CoffeeShop {
 
         while (agregandoProductos) {
             System.out.println("\n--- MENU DE PRODUCTOS ---");
-            for (String item : menuProductosDisplay) {
-                System.out.println(item);
-            }
-            
-            // Único lugar donde el texto 0 - Cancelar pedido es visible
+            etiquetas.values().forEach(System.out::println);
             System.out.println("0 - Cancelar pedido");
 
-            String busquedaLimpia = "";
-            
             while (true) {
                 System.out.print("\nIngrese el CODIGO o NOMBRE del producto: ");
                 String producto = scanner.nextLine().trim();
-                
-                if (producto.equals("0")) {
-                    System.out.println("Operacion cancelada. Volviendo al menu...");
-                    return;
-                }
-                
+                if (esCancelacion(producto)) return;
                 if (producto.isEmpty()) {
                     System.out.println("Error: No puede estar vacio.");
                     continue;
                 }
-
-                busquedaLimpia = normalizarTexto(producto);
-                
-                if (menuProductosValidador.contains(busquedaLimpia)) {
-                    break; 
-                } else {
-                    System.out.println("Error: El producto no existe en el menu. Verifique el codigo o nombre.");
+                try {
+                    productosDelCliente.add(buscarProducto(producto));
+                    break;
+                } catch (NoSuchElementException e) {
+                    System.out.println("Error: " + e.getMessage() + " Verifique el codigo o nombre.");
                 }
             }
-            
-            String nombreBonito = formatoProductos.get(busquedaLimpia);
-            productosDelCliente.add(nombreBonito);
 
-            System.out.println("\n¿Desea agregar otro producto a este pedido?");
-            System.out.println("S - Si");
-            System.out.println("N - No");
-            System.out.print("-> ");
-            String continuar = scanner.nextLine().trim().toUpperCase();
-            
-            // Función oculta de cancelar
-            if (continuar.equals("0")) {
-                System.out.println("Operacion cancelada. Volviendo al menu...");
-                return;
-            }
-            
-            if (!continuar.equals("S")) {
-                agregandoProductos = false;
+            while (true) {
+                System.out.print("\n¿Desea agregar otro producto? (S/N, 0 = cancelar): ");
+                String continuar = scanner.nextLine().trim().toUpperCase();
+                if (esCancelacion(continuar)) return;
+                if (continuar.equals("S")) break;
+                if (continuar.equals("N")) { agregandoProductos = false; break; }
+                System.out.println("Error: Responda S o N.");
             }
         }
 
-        String detalle = "";
-        while (true) {
+        String detalle = null;
+        while (detalle == null) {
             System.out.println("\n--- DESTINO DEL PEDIDO ---");
             System.out.println("1 - Consumir en el local (Mesa)");
             System.out.println("2 - Para llevar");
-            System.out.print("Seleccione (1 o 2): ");
-            
+            System.out.print("Seleccione (1 o 2, 0 = cancelar): ");
             String opDestino = scanner.nextLine().trim();
-            
-            // Función oculta de cancelar
-            if (opDestino.equals("0")) {
-                System.out.println("Operacion cancelada. Volviendo al menu...");
-                return;
-            }
-            
+            if (esCancelacion(opDestino)) return;
+
             if (opDestino.equals("1")) {
-                while (true) {
-                    System.out.println("\nIngrese el numero de mesa (1 al 9)");
-                    System.out.print("-> ");
+                while (detalle == null) {
+                    System.out.print("\nIngrese el numero de mesa (1 al 9, 0 = cancelar): ");
                     String inputMesa = scanner.nextLine().trim();
-                    
-                    // Función oculta de cancelar
-                    if (inputMesa.equals("0")) {
-                        System.out.println("Operacion cancelada. Volviendo al menu...");
-                        return;
-                    }
-                    
+                    if (esCancelacion(inputMesa)) return;
                     try {
                         int numMesa = Integer.parseInt(inputMesa);
                         if (numMesa >= 1 && numMesa <= 9) {
                             detalle = "Mesa " + numMesa;
-                            break; 
                         } else {
                             System.out.println("Error: El local solo tiene 9 mesas.");
                         }
@@ -332,27 +358,22 @@ public class CoffeeShop {
                         System.out.println("Error: Ingrese un numero valido.");
                     }
                 }
-                break; 
             } else if (opDestino.equals("2")) {
                 detalle = "Para llevar";
-                break;
             } else {
                 System.out.println("Error: Seleccione 1 o 2.");
             }
         }
 
-        Pedido nuevoPedido = new Pedido(nombreCliente, productosDelCliente, detalle, nombreEmpleado);
-        pedidos.offer(nuevoPedido); 
-        
+        registrarPedido(new Pedido(nombreCliente, productosDelCliente, detalle, nombreEmpleado));
         System.out.println("\n[EXITO] Pedido registrado correctamente en la cola de preparacion.");
     }
 
     private void atenderSiguientePedido() {
-        Pedido pedidoAtendido = pedidos.poll(); 
-        
+        Pedido pedidoAtendido = atenderSiguiente();
         System.out.println("\n--- ZONA DE PREPARACION ---");
         if (pedidoAtendido != null) {
-            System.out.println("Preparando pedido:\n" + pedidoAtendido.toString());
+            System.out.println("Preparando pedido:\n" + pedidoAtendido);
         } else {
             System.out.println("No hay pedidos pendientes en la cola.");
         }
@@ -362,18 +383,16 @@ public class CoffeeShop {
         System.out.println("\n--- PANTALLA DE COCINA: PEDIDOS EN ESPERA ---");
         if (pedidos.isEmpty()) {
             System.out.println("No hay ordenes pendientes.");
-        } else {
-            int contador = 1;
-            for (Pedido p : pedidos) {
-                System.out.println("\n[Orden #" + contador + "]");
-                System.out.println(p.toString());
-                contador++;
-            }
+            return;
+        }
+        int contador = 1;
+        for (Pedido p : pedidos) {
+            System.out.println("\n[Orden #" + contador++ + "]");
+            System.out.println(p);
         }
     }
 
     public static void main(String[] args) {
-        CoffeeShop miCafeteria = new CoffeeShop();
-        miCafeteria.iniciarSistema(); 
+        new CoffeeShop().iniciarSistema();
     }
 }
